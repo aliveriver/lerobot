@@ -8,11 +8,25 @@ from lerobot.optim.schedulers import (
 )
 
 
-@PreTrainedConfig.register_subclass("pi0fast")
+@PreTrainedConfig.register_subclass("pi0_fast")
 @dataclass
 class PI0FASTConfig(PreTrainedConfig):
+    type: str = "pi0_fast"           
     # Input / output structure.
     n_obs_steps: int = 1
+    # ================== 【新增：为了骗过解析器，强行对齐云端配置字段】 ==================
+    paligemma_variant: str = "google/paligemma-3b-pt-224"
+    dtype: str = "bfloat16"
+    max_action_tokens: int = 50
+    text_tokenizer_name: str = "google/paligemma-3b-pt-224"
+    action_tokenizer_name: str = "physical-intelligence/fast"
+    temperature: float = 0.0
+    image_resolution: list[int] = field(default_factory=lambda:[224, 224])
+    gradient_checkpointing: bool = False
+    compile_model: bool = False
+    compile_mode: str = "default"
+    optimizer_grad_clip_norm: float = 1.0
+    # ====================================================================================
     chunk_size: int = 10
     n_action_steps: int = 5
 

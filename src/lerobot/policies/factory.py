@@ -58,7 +58,7 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 
         return PI0Policy
-    elif name == "pi0fast":
+    elif name == "pi0_fast":
         from lerobot.policies.pi0fast.modeling_pi0fast import PI0FASTPolicy
 
         return PI0FASTPolicy
@@ -74,6 +74,7 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
         return SmolVLAPolicy
+
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 
@@ -89,7 +90,7 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return VQBeTConfig(**kwargs)
     elif policy_type == "pi0":
         return PI0Config(**kwargs)
-    elif policy_type == "pi0fast":
+    elif policy_type == "pi0_fast":
         return PI0FASTConfig(**kwargs)
     elif policy_type == "sac":
         return SACConfig(**kwargs)
