@@ -22,29 +22,13 @@ from lerobot.optim.schedulers import (
 )
 
 
-
-
 @PreTrainedConfig.register_subclass("pi0")
 @dataclass
 class PI0Config(PreTrainedConfig):
     # Input / output structure.
-    type: str = "pi0" 
     n_obs_steps: int = 1
     chunk_size: int = 50
     n_action_steps: int = 50
-    paligemma_variant: str = "google/paligemma-3b-pt-224"
-    action_expert_variant: str = "gemma"
-    dtype: str = "bfloat16"
-    num_inference_steps: int = 10
-    time_sampling_beta_alpha: float = 1.5
-    time_sampling_beta_beta: float = 1.0
-    min_period: float = 4e-3
-    max_period: float = 4.0
-    image_resolution: list[int] = field(default_factory=lambda:[224, 224])
-    compile_model: bool = False
-    compile_mode: str = "default"
-    optimizer_grad_clip_norm: float = 1.0
-    gradient_checkpointing: bool = False
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {

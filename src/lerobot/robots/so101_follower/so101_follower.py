@@ -106,7 +106,24 @@ class SO101Follower(Robot):
     @property
     def is_calibrated(self) -> bool:
         return self.bus.is_calibrated
+    def set_torque_enable(self, enable: bool):
+        """
+        控制所有舵机的扭矩开关
+        Args:
+            enable: True=锁定电机（正常工作），False=释放扭矩（可手动掰动）
+        """
+        if enable:
+            self.bus.enable_torque()
+        else:
+            self.bus.disable_torque()
 
+    def release_torque(self):
+        """便捷方法：释放所有电机扭矩"""
+        self.bus.disable_torque()
+
+    def lock_torque(self):
+        """便捷方法：锁定所有电机扭矩"""
+        self.bus.enable_torque()
     def calibrate(self) -> None:
         if self.calibration:
             # self.calibration is not empty here

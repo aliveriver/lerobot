@@ -34,6 +34,7 @@ from lerobot.policies.sac.reward_model.configuration_classifier import RewardCla
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
 from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
+from lerobot.policies.openvla.configuration_openvla import OpenVLAConfig
 
 
 def get_policy_class(name: str) -> PreTrainedPolicy:
@@ -58,7 +59,7 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 
         return PI0Policy
-    elif name == "pi0_fast":
+    elif name == "pi0fast":
         from lerobot.policies.pi0fast.modeling_pi0fast import PI0FASTPolicy
 
         return PI0FASTPolicy
@@ -74,7 +75,10 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
         return SmolVLAPolicy
+    elif name == "openvla":
+        from lerobot.policies.openvla.modeling_openvla import OpenVLAPolicy
 
+        return OpenVLAPolicy
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 
@@ -90,12 +94,14 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return VQBeTConfig(**kwargs)
     elif policy_type == "pi0":
         return PI0Config(**kwargs)
-    elif policy_type == "pi0_fast":
+    elif policy_type == "pi0fast":
         return PI0FASTConfig(**kwargs)
     elif policy_type == "sac":
         return SACConfig(**kwargs)
     elif policy_type == "smolvla":
         return SmolVLAConfig(**kwargs)
+    elif policy_type == "openvla":
+        return OpenVLAConfig(**kwargs)
     elif policy_type == "reward_classifier":
         return RewardClassifierConfig(**kwargs)
     else:

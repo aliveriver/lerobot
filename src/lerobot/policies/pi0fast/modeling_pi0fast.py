@@ -127,7 +127,7 @@ class PI0FASTPolicy(PreTrainedPolicy):
     """Wrapper class around PI0FAST tokenizer and model to train and run inference within LeRobot."""
 
     config_class = PI0FASTConfig
-    name = "pi0_fast"
+    name = "pi0fast"
 
     def __init__(
         self,
@@ -745,7 +745,7 @@ class PI0FAST(nn.Module):
 
         # Shift left for next-step prediction
         logits = logits[:, :-1, :]
-        targets = targets[:, 1:].to(device)
+        targets = targets[:, 1:].to(device)  # Shift targets
         loss_mask = loss_mask[:, 1:].to(device)  # Ensure correct shape
 
         # Compute per-token loss
