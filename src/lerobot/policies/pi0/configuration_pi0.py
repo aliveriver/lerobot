@@ -75,6 +75,15 @@ class PI0Config(PreTrainedConfig):
     train_expert_only: bool = False
     train_state_proj: bool = True
 
+    # LoRA finetuning. When enabled, the PaliGemma/Gemma base weights are frozen and only LoRA
+    # adapters plus the pi0 action/state projection heads are trained.
+    use_lora: bool = False
+    lora_r: int = 16
+    lora_alpha: int = 32
+    lora_dropout: float = 0.05
+    lora_target_modules: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
+    lora_apply_to: str = "all"  # "all", "language", or "expert"
+
     # Training presets
     optimizer_lr: float = 2.5e-5
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
@@ -106,6 +115,22 @@ class PI0Config(PreTrainedConfig):
             raise NotImplementedError(
                 "`use_delta_joint_actions_aloha` is used by pi0 for aloha real models. It is not ported yet in LeRobot."
             )
+        if self.use_lora:
+            if self.lora_r <= 0:
+                raise ValueError(f"`lora_r` must be > 0 when LoRA is enabled. Got {self.lora_r}.")
+            if self.lora_alpha <= 0:
+                raise ValueError(
+                    f"`lora_alpha` must be > 0 when LoRA is enabled. Got {self.lora_alpha}."
+                )
+            if self.lora_apply_to not in ["all", "language", "expert"]:
+                raise ValueError(
+                    f"`lora_apply_to` must be one of 'all', 'language', or 'expert'. Got {self.lora_apply_to}."
+                )
+            if self.train_expert_only and self.lora_apply_to in ["all", "language"]:
+                raise ValueError(
+                    "`train_expert_only=true` keeps PaliGemma in eval mode, which disables LoRA dropout on "
+                    "language adapters. Set `train_expert_only=false` or use `lora_apply_to=expert`."
+                )
 
     def validate_features(self) -> None:
         # TODO: implement value error

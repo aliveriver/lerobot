@@ -347,7 +347,7 @@ class PI0Policy(PreTrainedPolicy):
         return model
 
     def get_optim_params(self) -> dict:
-        return self.parameters()
+        return [param for param in self.parameters() if param.requires_grad]
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
@@ -575,6 +575,12 @@ class PI0FlowMatching(nn.Module):
             freeze_vision_encoder=self.config.freeze_vision_encoder,
             train_expert_only=self.config.train_expert_only,
             attention_implementation=self.config.attention_implementation,
+            use_lora=self.config.use_lora,
+            lora_r=self.config.lora_r,
+            lora_alpha=self.config.lora_alpha,
+            lora_dropout=self.config.lora_dropout,
+            lora_target_modules=self.config.lora_target_modules,
+            lora_apply_to=self.config.lora_apply_to,
         )
         self.paligemma_with_expert = PaliGemmaWithExpertModel(paligemma_with_export_config)
 

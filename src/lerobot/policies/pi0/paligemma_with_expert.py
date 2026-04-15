@@ -15,8 +15,8 @@
 
 import torch
 import torch.version
-from pytest import Cache
 from torch import nn
+from torch.nn import functional as F
 from transformers import (
     AutoConfig,
     GemmaForCausalLM,
@@ -24,6 +24,7 @@ from transformers import (
     PretrainedConfig,
     PreTrainedModel,
 )
+from transformers.cache_utils import Cache
 from transformers.models.auto import CONFIG_MAPPING
 
 from lerobot.policies.pi0.flex_attention import flex_attention_forward
@@ -55,6 +56,36 @@ def apply_rope(x, positions, max_wavelength=10_000):
     return res.to(dtype)
 
 
+class LoRALinear(nn.Module):
+    """LoRA adapter for a linear layer while keeping base checkpoint keys compatible."""
+
+    def __init__(self, base_layer: nn.Linear, r: int, alpha: int, dropout: float):
+        super().__init__()
+        self.in_features = base_layer.in_features
+        self.out_features = base_layer.out_features
+        self.r = r
+        self.scaling = alpha / r
+
+        self.weight = base_layer.weight
+        self.bias = base_layer.bias
+        self.weight.requires_grad = False
+        if self.bias is not None:
+            self.bias.requires_grad = False
+
+        dtype = self.weight.dtype
+        device = self.weight.device
+        self.lora_A = nn.Parameter(torch.empty(r, self.in_features, dtype=dtype, device=device))
+        self.lora_B = nn.Parameter(torch.zeros(self.out_features, r, dtype=dtype, device=device))
+        self.lora_dropout = nn.Dropout(p=dropout)
+        nn.init.kaiming_uniform_(self.lora_A, a=5**0.5)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        result = F.linear(x, self.weight, self.bias)
+        lora_input = self.lora_dropout(x).to(dtype=self.lora_A.dtype)
+        lora_output = F.linear(F.linear(lora_input, self.lora_A), self.lora_B)
+        return result + lora_output.to(dtype=result.dtype) * self.scaling
+
+
 class PaliGemmaWithExpertConfig(PretrainedConfig):
     model_type = "PaliGemmaWithExpertModel"
     sub_configs = {"paligemma_config": AutoConfig, "gemma_expert_config": AutoConfig}
@@ -66,11 +97,23 @@ class PaliGemmaWithExpertConfig(PretrainedConfig):
         freeze_vision_encoder: bool = True,
         train_expert_only: bool = True,
         attention_implementation: str = "eager",
+        use_lora: bool = False,
+        lora_r: int = 16,
+        lora_alpha: int = 32,
+        lora_dropout: float = 0.05,
+        lora_target_modules: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj"),
+        lora_apply_to: str = "all",
         **kwargs,
     ):
         self.freeze_vision_encoder = freeze_vision_encoder
         self.train_expert_only = train_expert_only
         self.attention_implementation = attention_implementation
+        self.use_lora = use_lora
+        self.lora_r = lora_r
+        self.lora_alpha = lora_alpha
+        self.lora_dropout = lora_dropout
+        self.lora_target_modules = tuple(lora_target_modules)
+        self.lora_apply_to = lora_apply_to
 
         if paligemma_config is None:
             # Default config from Pi0
@@ -165,6 +208,13 @@ class PaliGemmaWithExpertConfig(PretrainedConfig):
             raise ValueError(
                 f"Wrong value provided for `attention_implementation` ({self.attention_implementation}). Expected 'eager', 'fa2' or 'flex'."
             )
+        if self.use_lora:
+            if self.lora_apply_to not in ["all", "language", "expert"]:
+                raise ValueError(
+                    f"Wrong value provided for `lora_apply_to` ({self.lora_apply_to}). Expected 'all', 'language' or 'expert'."
+                )
+            if len(self.lora_target_modules) == 0:
+                raise ValueError("`lora_target_modules` must contain at least one module name.")
 
 
 class PaliGemmaWithExpertModel(PreTrainedModel):
@@ -180,8 +230,17 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
 
         self.to_bfloat16_like_physical_intelligence()
         self.set_requires_grad()
+        if self.config.use_lora:
+            self.inject_lora()
 
     def set_requires_grad(self):
+        if self.config.use_lora:
+            for params in self.paligemma.parameters():
+                params.requires_grad = False
+            for params in self.gemma_expert.parameters():
+                params.requires_grad = False
+            return
+
         if self.config.freeze_vision_encoder:
             self.paligemma.vision_tower.eval()
             for params in self.paligemma.vision_tower.parameters():
@@ -191,6 +250,37 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
             self.paligemma.eval()
             for params in self.paligemma.parameters():
                 params.requires_grad = False
+
+    def inject_lora(self):
+        injected = 0
+        if self.config.lora_apply_to in ["all", "language"]:
+            injected += self._inject_lora_into_module(self.paligemma.language_model)
+        if self.config.lora_apply_to in ["all", "expert"]:
+            injected += self._inject_lora_into_module(self.gemma_expert.model)
+
+        if injected == 0:
+            raise ValueError(
+                f"No LoRA target modules were found for targets {self.config.lora_target_modules}."
+            )
+
+    def _inject_lora_into_module(self, module: nn.Module) -> int:
+        injected = 0
+        for child_name, child in list(module.named_children()):
+            if isinstance(child, nn.Linear) and child_name in self.config.lora_target_modules:
+                setattr(
+                    module,
+                    child_name,
+                    LoRALinear(
+                        child,
+                        r=self.config.lora_r,
+                        alpha=self.config.lora_alpha,
+                        dropout=self.config.lora_dropout,
+                    ),
+                )
+                injected += 1
+            else:
+                injected += self._inject_lora_into_module(child)
+        return injected
 
     def train(self, mode: bool = True):
         super().train(mode)
