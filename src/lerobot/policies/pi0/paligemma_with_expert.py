@@ -15,7 +15,7 @@
 
 import torch
 import torch.version
-from pytest import Cache
+from transformers.cache_utils import Cache
 from torch import nn
 from transformers import (
     AutoConfig,
@@ -110,9 +110,9 @@ class PaliGemmaWithExpertConfig(PretrainedConfig):
                     "vision_use_head": False,
                 },
             )
-        elif isinstance(self.paligemma_config, dict):
+        elif isinstance(paligemma_config, dict):
             # Override Pi0 default config for PaliGemma
-            if "model_type" not in gemma_expert_config:
+            if "model_type" not in paligemma_config:
                 paligemma_config["model_type"] = "paligemma"
 
             cfg_cls = CONFIG_MAPPING[paligemma_config["model_type"]]
@@ -144,12 +144,12 @@ class PaliGemmaWithExpertConfig(PretrainedConfig):
                 use_cache=True,
                 vocab_size=257152,
             )
-        elif isinstance(self.gemma_expert_config, dict):
+        elif isinstance(gemma_expert_config, dict):
             # Override Pi0 default config for Gemma Expert
             if "model_type" not in gemma_expert_config:
                 gemma_expert_config["model_type"] = "gemma"
 
-            cfg_cls = CONFIG_MAPPING[paligemma_config["model_type"]]
+            cfg_cls = CONFIG_MAPPING[gemma_expert_config["model_type"]]
             self.gemma_expert_config = cfg_cls(**gemma_expert_config)
 
         super().__init__(**kwargs)
@@ -176,16 +176,18 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
         self.paligemma = PaliGemmaForConditionalGeneration(config=config.paligemma_config)
         self.gemma_expert = GemmaForCausalLM(config=config.gemma_expert_config)
         # Remove unused embed_tokens
-        self.gemma_expert.model.embed_tokens = None
 
         self.to_bfloat16_like_physical_intelligence()
         self.set_requires_grad()
 
     def set_requires_grad(self):
         if self.config.freeze_vision_encoder:
-            self.paligemma.vision_tower.eval()
-            for params in self.paligemma.vision_tower.parameters():
+            # ================== ���������������� transformers �汾�� ==================
+            vision_tower = self.paligemma.vision_tower if hasattr(self.paligemma, "vision_tower") else self.paligemma.model.vision_tower
+            vision_tower.eval()
+            for params in vision_tower.parameters():
                 params.requires_grad = False
+            # ======================================================================
 
         if self.config.train_expert_only:
             self.paligemma.eval()
@@ -196,7 +198,10 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
         super().train(mode)
 
         if self.config.freeze_vision_encoder:
-            self.paligemma.vision_tower.eval()
+            # ================== ���������������� transformers �汾�� ==================
+            vision_tower = self.paligemma.vision_tower if hasattr(self.paligemma, "vision_tower") else self.paligemma.model.vision_tower
+            vision_tower.eval()
+            # ======================================================================
 
         if self.config.train_expert_only:
             self.paligemma.eval()
@@ -215,15 +220,28 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
                 param.data = param.data.to(dtype=torch.bfloat16)
 
     def embed_image(self, image: torch.Tensor):
-        # Handle different transformers versions
-        if hasattr(self.paligemma, "get_image_features"):
-            return self.paligemma.get_image_features(image)
+        # ================== ���ռ��޸����ֶ�ִ�б�׼���Ӿ�-����ͶӰӳ�䡿 ==================
+        # 1. ��̬��ȡ�Ӿ�����ͶӰ�� (���ݲ�ͬ�汾�� transformers)
+        vision_tower = self.paligemma.vision_tower if hasattr(self.paligemma, "vision_tower") else self.paligemma.model.vision_tower
+        projector = self.paligemma.multi_modal_projector if hasattr(self.paligemma, "multi_modal_projector") else self.paligemma.model.multi_modal_projector
+        image = image.to(dtype=torch.bfloat16)
+        # 2. ͼ������Ӿ���ģ�ͣ�SigLIP������ǰ�򴫲�
+        vision_outputs = vision_tower(pixel_values=image)
+        
+        # 3. ��ȡ������������ص��� HuggingFace �������࣬����ǳ������ last_hidden_state
+        if hasattr(vision_outputs, "last_hidden_state"):
+            selected_image_feature = vision_outputs.last_hidden_state
         else:
-            return self.paligemma.model.get_image_features(image)
-
+            selected_image_feature = vision_outputs
+            
+        # 4. ���Ӿ������ӽ�ͶӰ�㣬ӳ��ɴ�����ģ���������ġ��Ӿ����ԡ�
+        image_features = projector(selected_image_feature)
+        
+        return image_features
+        # ====================================================================================
+        
     def embed_language_tokens(self, tokens: torch.Tensor):
-        return self.paligemma.language_model.embed_tokens(tokens)
-
+        return self.paligemma.language_model.model.embed_tokens(tokens)
     # TODO: break down this huge forward into modules or functions
     def forward(
         self,
@@ -234,8 +252,7 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
         use_cache: bool | None = None,
         fill_kv_cache: bool | None = None,
     ):
-        models = [self.paligemma.language_model, self.gemma_expert.model]
-
+        models = [self.paligemma.language_model.model, self.gemma_expert.model]
         for hidden_states in inputs_embeds:
             # TODO this is very inefficient
             # dtype is always the same, batch size too (if > 1 len)
@@ -260,17 +277,36 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
                 hidden_states = layer.input_layernorm(hidden_states)
 
                 input_shape = hidden_states.shape[:-1]
-                hidden_shape = (*input_shape, -1, layer.self_attn.head_dim)
 
+                # 【核心修复】：直接从当前模型的 config 中获取超参数，100% 避开底层 API 版本差异
+                current_config = models[i].config
+                num_heads = current_config.num_attention_heads
+                num_kv_heads = current_config.num_key_value_heads
+                # 兼容：有些旧版 config 直接叫 head_dim，如果没有就用 hidden_size 除以 num_heads
+                head_dim = getattr(current_config, "head_dim", current_config.hidden_size // num_heads)
+
+                # KV 的形状: (batch_size, seq_len, num_kv_heads, head_dim)
+                kv_shape = (*input_shape, num_kv_heads, head_dim)
+                # Q 的形状: (batch_size, seq_len, num_heads, head_dim)
+                q_shape = (*input_shape, num_heads, head_dim)
+
+                # 统一转换为 bfloat16 以防计算报错
                 hidden_states = hidden_states.to(dtype=torch.bfloat16)
-                query_state = layer.self_attn.q_proj(hidden_states).view(hidden_shape)
-                key_state = layer.self_attn.k_proj(hidden_states).view(hidden_shape)
-                value_state = layer.self_attn.v_proj(hidden_states).view(hidden_shape)
+
+                # 进行线性投影
+                q_proj_out = layer.self_attn.q_proj(hidden_states)
+                k_proj_out = layer.self_attn.k_proj(hidden_states)
+                v_proj_out = layer.self_attn.v_proj(hidden_states)
+
+                # 重塑形状 (严格区分 Q 和 K/V 的头数)
+                query_state = q_proj_out.view(q_shape)
+                key_state = k_proj_out.view(kv_shape)
+                value_state = v_proj_out.view(kv_shape)
 
                 query_states.append(query_state)
                 key_states.append(key_state)
                 value_states.append(value_state)
-
+                # ----------------- 替换结束 -----------------
             # B,L,H,D with L sequence length, H number of heads, D head dim
             # concatenate on the number of embeddings/tokens
             query_states = torch.cat(query_states, dim=1)
@@ -401,7 +437,7 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
 
         att_weights = torch.matmul(query_states, key_states.transpose(2, 3))
         att_weights *= head_dim**-0.5
-        big_neg = -2.3819763e38  # See gemma/modules.py
+        big_neg = torch.finfo(att_weights.dtype).min  # See gemma/modules.py
 
         masked_att_weights = torch.where(attention_mask[:, None, :, :], att_weights, big_neg)
 

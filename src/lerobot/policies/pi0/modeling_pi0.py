@@ -386,22 +386,40 @@ class PI0Policy(PreTrainedPolicy):
             state = self.prepare_state(batch)
             lang_tokens, lang_masks = self.prepare_language(batch)
 
+            # --- 优化 1：提速思考（10 步降为 5 步） ---
+            original_steps = self.model.config.num_steps
+            self.model.config.num_steps = 5
+
             actions = self.model.sample_actions(
                 images, img_masks, lang_tokens, lang_masks, state, noise=noise
             )
 
-            # Unpad actions
+            self.model.config.num_steps = original_steps
+            # ----------------------------------------
+
+            # 去除 Padding 和反归一化
             original_action_dim = self.config.action_feature.shape[0]
             actions = actions[:, :, :original_action_dim]
-
             actions = self.unnormalize_outputs({"action": actions})["action"]
 
             if self.config.adapt_to_pi_aloha:
                 actions = self._pi_aloha_encode_actions(actions)
 
-            # `self.model.forward` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
-            # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
-            self._action_queue.extend(actions.transpose(0, 1))
+            # --- 优化 2：严谨的截断与压入队列策略 ---
+            # actions 形状为 (batch_size, 50, action_dim)
+            # 转换后 action_chunk 形状为 (50, batch_size, action_dim)
+            action_chunk = actions.transpose(0, 1)
+
+            # 【核心参数】：每次只走 15 步就重新观察！
+            # 走 15 步只需要 0.5 秒，刚好够模型完成下一次 5 步去噪的思考。
+            # 这样既完美丢掉了后面几十步的“误差漂移”，又消除了“停顿思考”的空窗期！
+            keep_steps = 15
+
+            # 严谨的 for 循环压入，杜绝 IndexError 报错
+            valid_steps = min(keep_steps, action_chunk.shape[0])
+            for step_idx in range(valid_steps):
+                self._action_queue.append(action_chunk[step_idx])
+            # ----------------------------------------
         return self._action_queue.popleft()
 
     def forward(self, batch: dict[str, Tensor], noise=None, time=None) -> tuple[Tensor, dict[str, Tensor]]:
@@ -486,14 +504,17 @@ class PI0Policy(PreTrainedPolicy):
         """Tokenize the text input"""
         device = batch[OBS_STATE].device
         tasks = batch["task"]
-
+        if isinstance(tasks, str):
+            tasks = [tasks]
         # PaliGemma prompt has to end with a new line
         tasks = [task if task.endswith("\n") else f"{task}\n" for task in tasks]
 
+        # 换成老版本支持的属性赋值方式
+        self.language_tokenizer.padding_side = "right"
         tokenized_prompt = self.language_tokenizer.__call__(
             tasks,
             padding="max_length",
-            padding_side="right",
+            # padding_side="right",  <- 把这行直接删掉或注释掉
             max_length=self.config.tokenizer_max_length,
             return_tensors="pt",
         )
@@ -531,12 +552,23 @@ class PI0Policy(PreTrainedPolicy):
 
     def prepare_state(self, batch):
         """Pad state"""
-        state = pad_vector(batch[OBS_STATE], self.config.max_state_dim)
+        obs_state = batch[OBS_STATE]
+
+        # ==================== 【新增代码：强制对齐 batch_size 维度】 ====================
+        # 如果传进来的 state 是一维的（丢失了 batch 维度），强行在前面补一个 1
+        if obs_state.ndim == 1:
+            obs_state = obs_state.unsqueeze(0)
+        # ==============================================================================
+
+        state = pad_vector(obs_state, self.config.max_state_dim)
         return state
 
     def prepare_action(self, batch):
         """Pad action"""
-        actions = pad_vector(batch[ACTION], self.config.max_action_dim)
+        obs_action = batch[ACTION]
+        if obs_action.ndim == 2:
+            obs_action = obs_action.unsqueeze(0)
+        actions = pad_vector(obs_action, self.config.max_action_dim)
         return actions
 
 
@@ -756,6 +788,8 @@ class PI0FlowMatching(nn.Module):
 
     def sample_actions(self, images, img_masks, lang_tokens, lang_masks, state, noise=None) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
+        if state.ndim == 1:
+            state = state.unsqueeze(0)
         bsize = state.shape[0]
         device = state.device
 

@@ -26,6 +26,10 @@ from torch.optim import Optimizer
 
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
+
+from lerobot.policies.openvla.configuration_openvla import OpenVLAConfig
+from lerobot.policies.openvla.modeling_openvla import OpenVLAPolicy
+
 from lerobot.datasets.factory import make_dataset
 from lerobot.datasets.sampler import EpisodeAwareSampler
 from lerobot.datasets.utils import cycle
@@ -67,8 +71,8 @@ def update_policy(
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     policy.train()
-    with torch.autocast(device_type=device.type) if use_amp else nullcontext():
-        loss, output_dict = policy.forward(batch)
+    amp_dtype = torch.bfloat16 if getattr(policy.config, "type", "") in ["pi0", "openvla"] else torch.float16
+    with torch.autocast(device_type=device.type, dtype=amp_dtype) if use_amp else nullcontext():        loss, output_dict = policy.forward(batch)
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
     grad_scaler.scale(loss).backward()
 
@@ -143,8 +147,8 @@ def train(cfg: TrainPipelineConfig):
 
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
-    grad_scaler = GradScaler(device.type, enabled=cfg.policy.use_amp)
-
+    enable_scaler = cfg.policy.use_amp and getattr(cfg.policy, "type", "") not in ["pi0", "openvla"]
+    grad_scaler = GradScaler(device.type, enabled=enable_scaler)
     step = 0  # number of policy updates (forward + backward + optim)
 
     if cfg.resume:

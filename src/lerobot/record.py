@@ -357,6 +357,16 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
             ):
                 log_say("Reset the environment", cfg.play_sounds)
+                # ✅ 只释放扭矩，不尝试自动上锁（避免过载错误）
+                torque_released = False
+                if teleop is None:
+                    if hasattr(robot, "bus") and hasattr(robot.bus, "disable_torque"):
+                        try:
+                            robot.bus.disable_torque()
+                            torque_released = True
+                            log_say("扭矩已释放！", cfg.play_sounds)
+                        except Exception as e:
+                            log_say("出现问题", cfg.play_sounds)
                 record_loop(
                     robot=robot,
                     events=events,
@@ -366,6 +376,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
                 )
+                # ✅ 移除强制上锁代码，避免过载错误
+                # 下一轮 record_loop 开始时，机器人会自动处理扭矩状态
+                if torque_released:
+                    log_say("进入下一轮测试...", cfg.play_sounds)
 
             if events["rerecord_episode"]:
                 log_say("Re-record episode", cfg.play_sounds)
