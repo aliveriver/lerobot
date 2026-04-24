@@ -8,7 +8,6 @@ from lerobot.constants import ACTION
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.openvla.configuration_openvla import OpenVLAConfig
 from lerobot.policies.normalize import Normalize, Unnormalize
-
 try:
     # 适配最新的 transformers 5.0+ 版本
     from transformers import AutoModelForImageTextToText

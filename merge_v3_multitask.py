@@ -11,9 +11,9 @@ import pyarrow.compute as pc
 # ==========================================
 BASE_DIR = Path(r"C:\Users\86158\.cache\huggingface\lerobot")
 
-DATASET_1 = "task2_fixed_120"
-DATASET_2 = "task2_random_60"
-MERGED_DATASET = "task2_data"
+DATASET_1 = "task2_right_random_20"
+DATASET_2 = "task2_left_random_20"
+MERGED_DATASET = "task2_random_40"
 
 
 def offset_stats_dict(stats, key, offset):
