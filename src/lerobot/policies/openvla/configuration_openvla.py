@@ -13,7 +13,7 @@ from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 class OpenVLAConfig(PreTrainedConfig):
     type: str = "openvla"
     # ============ 1. 核心模型配置 ============
-    vlm_model_name: str = "C:/Users/vipuser/Desktop/openvla-7b"
+    vlm_model_name: str = "G:/openvla-7b"
     n_obs_steps: int = 1
     n_action_steps: int = 1
     chunk_size: int = 1
